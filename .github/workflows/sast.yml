@@ -1,23 +1,55 @@
-name: Golang SAST using Gosec
-on: [push, pull_request]
+name: Security Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    
 
 jobs:
-  gosec:
+  security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+      id-token: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - uses: actions/checkout@v6
         with:
-          go-version: '1.22'  # Use a newer Go version
+          fetch-depth: 1
 
-      - name: Install Gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Optional: Add track_progress: true for visual progress tracking during security reviews
+          # track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            # PR NUMBER: ${{ github.event.pull_request.number }}
 
-      - name: Run Gosec
-        continue-on-error: true
-        run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
-          gosec ./...
+            Perform a comprehensive security review:
+
+            ## OWASP Top 10 Analysis
+            - SQL Injection vulnerabilities
+            - Cross-Site Scripting (XSS)
+            - Broken Authentication
+            - Sensitive Data Exposure
+            - XML External Entities (XXE)
+            - Broken Access Control
+            - Security Misconfiguration
+            - Cross-Site Request Forgery (CSRF)
+            - Using Components with Known Vulnerabilities
+            - Insufficient Logging & Monitoring
+
+            ## Additional Security Checks
+            - Hardcoded secrets or credentials
+            - Insecure cryptographic practices
+            - Unsafe deserialization
+            - Server-Side Request Forgery (SSRF)
+            - Race conditions or TOCTOU issues
+
+            Rate severity as: CRITICAL, HIGH, MEDIUM, LOW, or NONE.
+            Post detailed findings with recommendations.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
