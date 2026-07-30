@@ -273,7 +273,9 @@ jobs:
               --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
 
       - name: Write findings to file
-        run: echo '${{ steps.security.outputs.structured_output }}' > security-findings.json
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
+        run: echo "$STRUCTURED_OUTPUT" > security-findings.json
       
       - uses: actions/upload-artifact@v4
         with:
