@@ -15,8 +15,6 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
         with:
@@ -25,7 +23,7 @@ jobs:
           # track_progress: true
           prompt: |
             REPO: ${{ github.repository }}
-            # PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
             Perform a comprehensive security review:
 
@@ -50,6 +48,16 @@ jobs:
 
             Rate severity as: CRITICAL, HIGH, MEDIUM, LOW, or NONE.
             Post detailed findings with recommendations.
-
+            Populate the JSON schema with every finding you identify.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
+              --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
+              --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
+
+      - name: Write findings to file
+        run: echo '${{ steps.security.outputs.structured_output }}' > security-findings.json
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-review-results
+          path: security-findings.json
+          retention-days: 7
