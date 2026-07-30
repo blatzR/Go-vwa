@@ -267,10 +267,11 @@ jobs:
             
             These are entry points, not complete coverage — research the language's own CWE patterns, CVE
             history, and known footguns.
+            Write your full analysis, including reasoning for each finding, to a file at security-review-output.md in the repo root.
             Populate the JSON schema with every finding you identify.
           claude_args: |
               --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
-              --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
+              --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
 
       - name: Write findings to file
         env:
@@ -282,3 +283,11 @@ jobs:
           name: security-review-results
           path: security-findings.json
           retention-days: 7
+
+      - name: Post analysus as PR comment
+        env:
+            GH_TOKEN: ${{ github.token }}
+          run: |
+            gh pr comment ${{ github.event.pull_request.number }} \
+              --repo ${{ github.repository }} \
+              --body-file security-review-output.md
