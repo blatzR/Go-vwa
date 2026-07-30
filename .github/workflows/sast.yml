@@ -286,8 +286,8 @@ jobs:
 
       - name: Post analysus as PR comment
         env:
-            GH_TOKEN: ${{ github.token }}
-          run: |
+          GH_TOKEN: ${{ github.token }}
+        run: |
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
               --body-file security-review-output.md
