@@ -259,12 +259,12 @@ jobs:
             - Log **all** authorization decisions, not only failures (16.3.2, L3 clause)
             
             For an actual L3 assessment, work from the standard itself — see
-            [`reference/owasp-report.md`](reference/owasp-report.md) for the chapter map.
+            https://github.com/agamm/claude-code-owasp/blob/main/.claude/skills/owasp-security/reference/owasp-report.md for the chapter map.
             
             ## Language-Specific Security Quirks
             
             For per-language unsafe/safe examples and the functions to watch for across 20+ languages, see
-            [`reference/languages.md`](reference/languages.md). For anything not covered there, apply the
+            https://github.com/agamm/claude-code-owasp/blob/main/.claude/skills/owasp-security/reference/languages.md. For anything not covered there, apply the
             mindset below.
             
             ## Deep Security Analysis Mindset
@@ -284,7 +284,7 @@ jobs:
             
             These are entry points, not complete coverage — research the language's own CWE patterns, CVE
             history, and known footguns.
-            Write your full analysis, including reasoning for each finding, to a file at security-review-output.md in the repo root.
+            Write your full analysis with severity/impact category below title, including reasoning for each finding, to a file at security-review-output.md in the repo root.
             Populate the JSON schema with every finding you identify.
           claude_args: |
               --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
