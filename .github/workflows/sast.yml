@@ -359,3 +359,14 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body-file security-review-output.md
+
+      - name: Security gate
+        id: gate
+        run: |
+          COUNT=$(jq '[.findings[] | select(.severity == "CRITICAL" or .severity == "HIGH")] | length' security-findings.json)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Critical/High findings: $COUNT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::error::Found $COUNT CRITICAL/HIGH severity finding(s). Failing the pipeline."
+            exit 1
+          fi
