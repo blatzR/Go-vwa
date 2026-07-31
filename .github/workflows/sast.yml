@@ -290,6 +290,12 @@ jobs:
               --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
               --allowedTools "Write,Bash(gh pr diff:*)"
 
+      - name: Write structured findings to file
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
+        run: printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
+
+
       - name: Convert findings to SARIF
         run: |
           python3 - <<'EOF'
