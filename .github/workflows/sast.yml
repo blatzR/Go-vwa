@@ -370,6 +370,3 @@ jobs:
             echo "::error::Found $COUNT CRITICAL/HIGH severity finding(s). Failing the pipeline."
             exit 1
           fi
-            echo "::error::Found $COUNT CRITICAL/HIGH severity finding(s). Failing the pipeline."
-            exit 1
-          fi
