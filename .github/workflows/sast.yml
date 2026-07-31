@@ -16,6 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get changed files
+        id: diff
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "files<<EOF"
+            gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        
+
       - uses: anthropics/claude-code-action@v1
         id: security
         with:
@@ -25,7 +38,11 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
-
+            <HARD_RULE>
+            Only review the changes introduced in this PR — do not flag or analyze
+            pre-existing code this PR doesn't touch. Changed files:
+            ${{ steps.diff.outputs.files }}
+            </HARD_RULE>
             ---
             name: owasp-security
             description: Use when reviewing code for security vulnerabilities, implementing authentication/authorization, handling user input, or discussing web application security. Covers OWASP Top 10:2025, ASVS 5.0, LLM Top 10 (2025), and Agentic AI security (2026).
@@ -271,23 +288,68 @@ jobs:
             Populate the JSON schema with every finding you identify.
           claude_args: |
               --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
-              --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*)"
+              --allowedTools "Write,Bash(gh pr diff:*)"
 
-      - name: Write findings to file
-        env:
-          STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
-        run: echo "$STRUCTURED_OUTPUT" > security-findings.json
-      
-      - uses: actions/upload-artifact@v4
+      - name: Convert findings to SARIF
+        run: |
+          python3 - <<'EOF'
+          import json
+
+          SEVERITY_MAP = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note"}
+
+          findings = json.load(open("security-findings.json")).get("findings", [])
+
+          sarif = {
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {"driver": {"name": "claude-security-review", "informationUri": "https://claude.com", "rules": []}},
+                  "results": []
+              }]
+          }
+
+          rule_ids = {}
+          for f in findings:
+              rule_id = f.get("category", "generic-finding")
+              if rule_id not in rule_ids:
+                  rule_ids[rule_id] = len(sarif["runs"][0]["tool"]["driver"]["rules"])
+                  sarif["runs"][0]["tool"]["driver"]["rules"].append({
+                      "id": rule_id,
+                      "shortDescription": {"text": rule_id}
+                  })
+              sarif["runs"][0]["results"].append({
+                  "ruleId": rule_id,
+                  "ruleIndex": rule_ids[rule_id],
+                  "level": SEVERITY_MAP.get(f.get("severity", "").upper(), "warning"),
+                  "message": {"text": f"{f.get('description','')} Recommendation: {f.get('recommendation','')}"},
+                  "locations": [{
+                      "physicalLocation": {
+                          "artifactLocation": {"uri": f.get("file", "unknown")},
+                          "region": {"startLine": f.get("line", 1)}
+                      }
+                  }]
+              })
+
+          json.dump(sarif, open("security-findings.sarif", "w"), indent=2)
+          EOF
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: security-review-results
-          path: security-findings.json
+          path: |
+            security-review-output.md
+            security-findings.json
+            security-findings.sarif
           retention-days: 7
+          if-no-files-found: ignore
 
-      - name: Post analysus as PR comment
+      - name: Post analysis as PR comment
+        if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-            gh pr comment ${{ github.event.pull_request.number }} \
-              --repo ${{ github.repository }} \
-              --body-file security-review-output.md
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body-file security-review-output.md
