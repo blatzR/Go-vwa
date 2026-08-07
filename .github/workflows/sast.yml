@@ -435,7 +435,10 @@ jobs:
  
           def existing_issue(label):
               jql = f'project = "{JIRA_PROJECT_KEY}" AND labels = "{label}"'
-              result = jira_request("GET", f"/rest/api/3/search?jql={urllib.parse.quote(jql)}&fields=key")
+              result = jira_request(
+                  "GET",
+                  f"/rest/api/3/search/jql?jql={urllib.parse.quote(jql)}&fields=key&maxResults=1",
+              )
               issues = result.get("issues", [])
               return issues[0]["key"] if issues else None
  
