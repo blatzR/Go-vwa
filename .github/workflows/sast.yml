@@ -445,8 +445,8 @@ jobs:
           def create_subtask(finding, label):
               payload = {
                   "fields": {
-                      "project": {"key": JIRA_PROJECT_KEY},
-                      "parent": {"key": "SOC-40249"},
+                      "project": {"key": "{JIRA_PROJECT_KEY}"},
+                      "parent": {"key": "{JIRA_STORY_KEY}"},
                       "issuetype": {"name": "Sub-task"},
                       "summary": f"[{finding.get('severity','')}] {finding.get('category','')} in {finding.get('file','')}",
                       "description": adf_description(finding),
