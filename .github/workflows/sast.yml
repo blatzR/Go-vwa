@@ -446,7 +446,7 @@ jobs:
               payload = {
                   "fields": {
                       "project": {"key": JIRA_PROJECT_KEY},
-                      "parent": {"key": JIRA_STORY_KEY},
+                      "parent": {"key": "SOC-40249"},
                       "issuetype": {"name": "Sub-task"},
                       "summary": f"[{finding.get('severity','')}] {finding.get('category','')} in {finding.get('file','')}",
                       "description": adf_description(finding),
