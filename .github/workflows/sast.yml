@@ -3,6 +3,7 @@ on:
   pull_request:
     types: [opened, synchronize]
   workflow_dispatch:
+  
     
 
 jobs:
@@ -359,6 +360,152 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body-file security-review-output.md
+
+      - name: Sync Findings to JIRA
+        id: jira
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          JIRA_STORY_KEY: ${{ secrets.JIRA_STORY_KEY }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          # SYNC_SEVERITY: ${{ inputs.fail_on_severity }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, json, os, urllib.error, urllib.parse, urllib.request
+ 
+          JIRA_BASE_URL = os.environ["JIRA_BASE_URL"].rstrip("/")
+          JIRA_EMAIL = os.environ["JIRA_EMAIL"]
+          JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
+          JIRA_PROJECT_KEY = os.environ["JIRA_PROJECT_KEY"]
+          JIRA_STORY_KEY = os.environ["JIRA_STORY_KEY"]
+          SYNC_SEVERITIES = ["CRITICAL","HIGH","MEDIUM"]
+ 
+          PR_NUMBER = os.environ["PR_NUMBER"]
+          PR_URL = os.environ["PR_URL"]
+          PR_AUTHOR = os.environ["PR_AUTHOR"]
+          PR_BRANCH = os.environ["PR_BRANCH"]
+          COMMIT_SHA = os.environ["COMMIT_SHA"]
+ 
+          auth = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
+          HEADERS = {
+              "Authorization": f"Basic {auth}",
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+          }
+ 
+          def jira_request(method, path, body=None):
+              url = f"{JIRA_BASE_URL}{path}"
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      raw = resp.read()
+                      return json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as e:
+                  print(f"::error::Jira API {method} {path} failed: {e.code} {e.read().decode()}")
+                  raise
+ 
+          def adf_description(finding):
+              def para(text):
+                  return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+              return {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                      para(f"Severity: {finding.get('severity','')}  |  Category: {finding.get('category','')}"),
+                      para(f"File: {finding.get('file','')}  Line: {finding.get('line','')}"),
+                      para(finding.get("description", "")),
+                      para(f"Recommendation: {finding.get('recommendation','')}"),
+                      para(f"PR: {PR_URL} (#{PR_NUMBER}) by {PR_AUTHOR} on branch {PR_BRANCH} @ {COMMIT_SHA[:7]}"),
+                  ],
+              }
+ 
+          def fingerprint_label(finding):
+              key = f"{finding.get('file','')}:{finding.get('line','')}:{finding.get('category','')}"
+              short_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
+              return f"secreview-pr{PR_NUMBER}-{short_hash}"
+ 
+          def existing_issue(label):
+              jql = f'project = "{JIRA_PROJECT_KEY}" AND labels = "{label}"'
+              result = jira_request("GET", f"/rest/api/3/search?jql={urllib.parse.quote(jql)}&fields=key")
+              issues = result.get("issues", [])
+              return issues[0]["key"] if issues else None
+ 
+          def create_subtask(finding, label):
+              payload = {
+                  "fields": {
+                      "project": {"key": JIRA_PROJECT_KEY},
+                      "parent": {"key": JIRA_STORY_KEY},
+                      "issuetype": {"name": "Sub-task"},
+                      "summary": f"[{finding.get('severity','')}] {finding.get('category','')} in {finding.get('file','')}",
+                      "description": adf_description(finding),
+                      "labels": ["security-review", f"pr-{PR_NUMBER}", label],
+                  }
+              }
+              created = jira_request("POST", "/rest/api/3/issue", payload)
+              return created["key"]
+ 
+          def main():
+              with open("security-findings.json") as f:
+                  findings = json.load(f).get("findings", [])
+ 
+              created_keys = []
+              skipped_keys = []
+ 
+              for finding in findings:
+                  severity = (finding.get("severity") or "").upper()
+                  if severity not in SYNC_SEVERITIES:
+                      continue
+                  label = fingerprint_label(finding)
+                  existing = existing_issue(label)
+                  if existing:
+                      print(f"Skipping existing issue {existing} for {label}")
+                      skipped_keys.append(existing)
+                      continue
+                  key = create_subtask(finding, label)
+                  print(f"Created {key} for {label}")
+                  created_keys.append(key)
+ 
+              with open("jira-sync-summary.json", "w") as f:
+                  json.dump({"created": created_keys, "skipped_existing": skipped_keys}, f, indent=2)
+ 
+          main()
+          EOF
+
+      - name: Comment Jira links on PR
+        
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+        run: |
+          if [ -s jira-sync-summary.json ]; then
+            python3 - <<'EOF'
+          import json, os
+ 
+          data = json.load(open("jira-sync-summary.json"))
+          base = os.environ["JIRA_BASE_URL"].rstrip("/")
+          lines = ["### Jira sync"]
+          for key in data.get("created", []):
+              lines.append(f"- Created: [{key}]({base}/browse/{key})")
+          for key in data.get("skipped_existing", []):
+              lines.append(f"- Already tracked: [{key}]({base}/browse/{key})")
+          if len(lines) == 1:
+              lines.append("_No findings met the Jira sync severity threshold._")
+          open("jira-comment.md", "w").write("\n".join(lines))
+          EOF
+            gh pr comment ${{ github.event.pull_request.number }} \
+              --repo ${{ github.repository }} \
+              --body-file jira-comment.md
+          fi
+          
 
       - name: Security gate
         id: gate
