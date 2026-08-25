@@ -9,9 +9,6 @@ on:
 jobs:
   security:
     runs-on: ubuntu-latest
-    strategy:
-        matrix:
-          SYNC_SEVERITY: ["CRITICAL","HIGH","MEDIUM"]
     permissions:
       contents: read
       pull-requests: write
