@@ -15,7 +15,7 @@ func Connect() (*sql.DB, error) {
 	var dsn string
 	var db *sql.DB
 
-	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.User, ${{ secrets.SESSION_KEY }}, config.Sqlhost, config.Sqlport)
+	dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/", config.User, config.Password, config.Sqlhost, config.Sqlport)
 	db, err := sql.Open("mysql", dsn)
 
 	if err != nil {
