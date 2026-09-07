@@ -1,11 +1,11 @@
 {
     "user": "govwauser",
-    "password": "",
+    "password": "12345678",
     "dbname": "govwa",
     "sqlhost": "db-mysql",
     "sqlport": "3306",
     "webserver": "http://localhost",
     "webport": "8888",
 
-    "sessionkey:": ""
+    "sessionkey:": "Govw@444"
 }
