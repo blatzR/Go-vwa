@@ -16,7 +16,7 @@ func New() *Self {
 	return &Self{}
 }
 
-var store = sessions.NewCookieStore([]byte($ {{ secrets.SESSION_KEY }} ))
+var store = sessions.NewCookieStore([]byte(config.Cfg.Sessionkey))
 
 func (self *Self) SetSession(w http.ResponseWriter, r *http.Request, data map[string]string) {
 	session, err := store.Get(r, "govwa")
