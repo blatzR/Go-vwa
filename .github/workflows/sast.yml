@@ -1,13 +1,4 @@
 name: Security Review (decoupled)
-# Behavior is identical to security-review.yml — this version just moves the large static prompt text and embedded Python out of the YAML and into
-# separate files under .github/security-review/, referenced from here. Expected layout in this repo:
-#   .github/security-review/prompts/review-skill.md
-#   .github/security-review/prompts/verify-skill.md
-#   .github/security-review/scripts/convert_to_sarif.py
-#   .github/security-review/scripts/sync_jira.py
-#   .github/security-review/scripts/comment_jira_links.py
-#   .github/security-review/scripts/close_resolved_jira_issues.py
-#   .github/security-review/scripts/comment_resolution_summary.py
 
 on:
   pull_request:
@@ -148,10 +139,8 @@ jobs:
             exit 1
           fi
 
-  # Runs only when a PR actually merges (not on close-without-merge), and only
-  # if Jira sync is configured (same secrets.jira_base_url guard used above).
-  # Re-scans the files this PR touched and closes any previously-open Jira
-  # sub-task whose finding is no longer present in that fresh scan.
+  # Runs only when a PR actually merges (not on close-without-merge), and only if Jira sync is configured (same secrets.jira_base_url guard used above).
+  # Re-scans the files this PR touched and closes any previously-open Jira sub-task whose finding is no longer present in that fresh scan.
   resolve:
     if: github.event.pull_request.merged == true 
     runs-on: ubuntu-latest
@@ -163,8 +152,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Full history needed so both base.sha and merge_commit_sha below
-          # are locally resolvable for a direct git diff.
+          # Full history needed so both base.sha and merge_commit_sha below are locally resolvable for a direct git diff.
           fetch-depth: 0
 
       - name: Get merged PR's changed files
