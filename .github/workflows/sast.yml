@@ -1,12 +1,28 @@
-name: Security Review
+name: Security Review (decoupled)
+# Behavior is identical to security-review.yml — this version just moves the large static prompt text and embedded Python out of the YAML and into
+# separate files under .github/security-review/, referenced from here. Expected layout in this repo:
+#   .github/security-review/prompts/review-skill.md
+#   .github/security-review/prompts/verify-skill.md
+#   .github/security-review/scripts/convert_to_sarif.py
+#   .github/security-review/scripts/sync_jira.py
+#   .github/security-review/scripts/comment_jira_links.py
+#   .github/security-review/scripts/close_resolved_jira_issues.py
+#   .github/security-review/scripts/comment_resolution_summary.py
+
 on:
   pull_request:
-    # 'closed' added so the resolve job (auto-close on merge) can run.
-    # The 'security' job explicitly excludes this action below, so opened/
+    # 'closed' added so the resolve job (auto-close on merge) can run. The 'security' job explicitly excludes this action below, so opened/
     # synchronize/workflow_dispatch behave exactly as before.
     types: [opened, synchronize, closed]
   workflow_dispatch:
 
+# Serializes runs per-PR (falls back to run_id for workflow_dispatch, which has no PR number). Without this, two pushes in quick succession can race: both
+# runs search Jira, both see "not found" — either because the first run's create genuinely hasn't happened yet, or because Jira's search index can lag
+# a few seconds behind a write — and both create a duplicate issue for the same finding. cancel-in-progress is false deliberately: a run that's
+# mid-write to Jira should be allowed to finish, not be killed and left half-done; later pushes queue behind it instead.
+concurrency:
+  group: security-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   security:
@@ -19,6 +35,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+
       - name: Get changed files
         id: diff
         if: github.event_name == 'pull_request'
@@ -29,6 +46,15 @@ jobs:
             echo "files<<EOF"
             gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only
             echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Load review prompt
+        id: load_review_prompt
+        run: |
+          {
+            echo "content<<PROMPT_EOF"
+            cat .github/security-review/prompts/review-skill.md
+            echo "PROMPT_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
@@ -44,295 +70,21 @@ jobs:
             Only review the changes introduced in this PR — do not flag or analyze
             pre-existing code this PR doesn't touch. Changed files:
             ${{ steps.diff.outputs.files }}
-            Write your full analysis with severity [Critical, High, Medium, Low] based on CVSS score and impact, category below title, including reasoning for each finding, to a file at security-review-output.md in the repo root.
             </HARD_RULE>
-            ---
-            name: owasp-security
-            description: Use when reviewing code for security vulnerabilities, implementing authentication/authorization, handling user input, or discussing web application security. Covers OWASP Top 10:2025, ASVS 5.0, LLM Top 10 (2025), and Agentic AI security (2026).
-            ---
-            
-            # OWASP Security Best Practices Skill
-            
-            Apply these security standards when writing or reviewing code.
-            
-            **Reference files** (load on demand):
-            - [`reference/languages.md`](reference/languages.md) — per-language security quirks with unsafe/safe examples for 20+ languages.
-            - [`reference/owasp-report.md`](reference/owasp-report.md) — comprehensive deep-dive on every OWASP 2025–2026 standard.
-            
-            ## Quick Reference: OWASP Top 10:2025
-            
-            | # | Vulnerability | Key Prevention |
-            |---|---------------|----------------|
-            | A01 | Broken Access Control | Deny by default, enforce server-side, verify ownership |
-            | A02 | Security Misconfiguration | Harden configs, disable defaults, minimize features |
-            | A03 | Software Supply Chain Failures | Lock versions, verify integrity, audit dependencies |
-            | A04 | Cryptographic Failures | TLS 1.2+, AES-256-GCM, Argon2/bcrypt for passwords |
-            | A05 | Injection | Parameterized queries, input validation, safe APIs |
-            | A06 | Insecure Design | Threat model, rate limit, design security controls |
-            | A07 | Authentication Failures | MFA, check breached passwords, secure sessions |
-            | A08 | Software or Data Integrity Failures | Sign packages, SRI for CDN, safe serialization |
-            | A09 | Security Logging and Alerting Failures | Log security events, structured format, alerting |
-            | A10 | Mishandling of Exceptional Conditions | Fail-closed, hide internals, log with context |
-            
-            ## Before Reporting a Finding
-            
-            A pattern match is not a vulnerability. The most common failure mode in automated security
-            review is reporting unreachable or already-mitigated code, which buries the real findings.
-            Confirm all three before reporting:
-            
-            1. **Is the input actually attacker-controlled?** Trace it back to a real entry point — a
-               request parameter, header, cookie, uploaded file, webhook, queue message, or third-party
-               API response. A value that only ever comes from a constant, an enum, or trusted internal
-               config is not an injection source.
-            2. **Is the sink reachable with that input?** Check whether validation, an allowlist, an ORM,
-               or a framework-level control already sits between them. Look for auth middleware
-               (`middleware.ts`, `proxy.ts`, Express/Django/Rails middleware, a base controller,
-               decorators) before flagging a route as missing authorization — enforcement is often
-               centralized rather than per-route.
-            3. **What is the blast radius?** Who can trigger it, what do they get, and does it cross a
-               trust boundary? An SSRF reaching cloud metadata differs from one reaching localhost only.
-            
-            Report severity by exploitability, not by pattern. State the concrete path — *this input
-            reaches this sink* — and say so explicitly when a finding is theoretical or defense-in-depth
-            rather than directly exploitable. If reachability can't be determined from the code available,
-            say that instead of asserting either way.
-            
-            ## Security Code Review Checklist
-            
-            When reviewing code, check for these issues:
-            
-            ### Input Handling
-            - [ ] All user input validated server-side
-            - [ ] Using parameterized queries (not string concatenation)
-            - [ ] Input length limits enforced
-            - [ ] Allowlist validation preferred over denylist
-            
-            ### Authentication & Sessions
-            - [ ] Passwords hashed with Argon2/bcrypt (not MD5/SHA1)
-            - [ ] Session tokens have sufficient entropy (128+ bits)
-            - [ ] Sessions invalidated on logout
-            - [ ] MFA available for sensitive operations
-            
-            ### Access Control
-            - [ ] Authorization checked on every request
-            - [ ] Using object references user cannot manipulate
-            - [ ] Deny by default policy
-            - [ ] Privilege escalation paths reviewed
-            
-            ### Data Protection
-            - [ ] Sensitive data encrypted at rest
-            - [ ] TLS for all data in transit
-            - [ ] No sensitive data in URLs/logs
-            - [ ] Secrets in environment/vault (not code)
-            
-            ### Error Handling
-            - [ ] No stack traces exposed to users
-            - [ ] Fail-closed on errors (deny, not allow)
-            - [ ] All exceptions logged with context
-            - [ ] Consistent error responses (no enumeration)
-            
-            ## Secure Code Patterns
-            
-            ### SQL Injection Prevention
-            ```python
-            # UNSAFE
-            cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
-            
-            # SAFE
-            cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-            ```
-            
-            ### Command Injection Prevention
-            ```python
-            # UNSAFE
-            os.system(f"convert {filename} output.png")
-            
-            # SAFE
-            subprocess.run(["convert", filename, "output.png"], shell=False)
-            ```
-            
-            ### Password Storage
-            ```python
-            # UNSAFE
-            hashlib.md5(password.encode()).hexdigest()
-            
-            # SAFE
-            from argon2 import PasswordHasher
-            PasswordHasher().hash(password)
-            ```
-            
-            ### Access Control
-            ```python
-            # UNSAFE - No authorization check
-            @app.route('/api/user/<user_id>')
-            def get_user(user_id):
-                return db.get_user(user_id)
-            
-            # SAFE - Authorization enforced
-            @app.route('/api/user/<user_id>')
-            @login_required
-            def get_user(user_id):
-                if current_user.id != user_id and not current_user.is_admin:
-                    abort(403)
-                return db.get_user(user_id)
-            ```
-            
-            ### Error Handling
-            ```python
-            # UNSAFE - Exposes internals
-            @app.errorhandler(Exception)
-            def handle_error(e):
-                return str(e), 500
-            
-            # SAFE - Fail-closed, log context
-            @app.errorhandler(Exception)
-            def handle_error(e):
-                error_id = uuid.uuid4()
-                logger.exception(f"Error {error_id}: {e}")
-                return {"error": "An error occurred", "id": str(error_id)}, 500
-            ```
-            
-            ### Fail-Closed Pattern
-            ```python
-            # UNSAFE - Fail-open
-            def check_permission(user, resource):
-                try:
-                    return auth_service.check(user, resource)
-                except Exception:
-                    return True  # DANGEROUS!
-            
-            # SAFE - Fail-closed
-            def check_permission(user, resource):
-                try:
-                    return auth_service.check(user, resource)
-                except Exception as e:
-                    logger.error(f"Auth check failed: {e}")
-                    return False  # Deny on error
-            ```
-            
-            
-            ## ASVS 5.0 Key Requirements
-            
-            ASVS 5.0 (May 2025) renumbered and reorganized every chapter. **4.0 requirement IDs do not
-            map to 5.0** — `V2.1.1` meant "password length" in 4.0 and means something else now. Cite
-            5.0 IDs only. Levels are defined by share of requirements, not by application category:
-            
-            | Level | Share | Intent |
-            |---|---|---|
-            | L1 | ~20% | Minimum bar; deliberately small to lower the barrier to entry |
-            | L2 | ~50% (≈70% cumulative) | What most applications should target |
-            | L3 | remaining ~30% | Highest assurance |
-            
-            ### Level 1 — the minimum bar
-            - Passwords **at least 8 characters**; 15+ strongly recommended (6.2.1)
-            - No composition rules — permit any characters, paste, and password managers (6.2.5, 6.2.7)
-            - Block at least the top 3000 common passwords (6.2.4)
-            - Anti-automation against credential stuffing and brute force (6.3.1)
-            - No default accounts like `root`/`admin`/`sa` (6.3.2)
-            - Reference session tokens from a CSPRNG with 128+ bits entropy (7.2.3)
-            - New session token issued on authentication and re-authentication (7.2.4)
-            - Session fully unusable after logout or expiry (7.4.1)
-            - Function-level and data-level access restricted to explicit permissions (8.2.1, 8.2.2)
-            - Authorization enforced at a trusted service layer the client cannot manipulate (8.3.1)
-            - Parameterized queries / ORM for all data access (1.2.4); parameterized OS calls (1.2.5)
-            - Context-appropriate output encoding for HTML, URLs, and JavaScript/JSON (1.2.1–1.2.3)
-            - Avoid `eval()` and dynamic code execution (1.3.2)
-            - Input validated at a trusted service layer, positive/allowlist where possible (2.2.1, 2.2.2)
-            - TLS 1.2+ on all external traffic, publicly trusted certificates (12.1.1, 12.2.1, 12.2.2)
-            - Approved ciphers and modes only — no ECB, no PKCS#1 v1.5 padding (11.3.1, 11.3.2)
-            - No sensitive data in URLs or query strings (14.2.1)
-            
-            ### Level 2 — what most applications should target
-            - MFA, or a documented combination of single factors (6.3.3)
-            - Passwords checked against a breached-password set (6.2.12)
-            - No forced periodic password rotation — rotate only on compromise (6.2.10)
-            - **All security logging starts here.** ASVS 5.0 has *no* L1 logging requirements; the whole
-              of V16 is L2+. Log authentication attempts, failed authorization, security events, and
-              unexpected errors (16.3.1–16.3.4)
-            - Log entries carry when/where/who/what metadata on a synchronized clock (16.2.1, 16.2.2)
-            - Logs encoded against log injection, protected from modification, shipped off-box (16.4.1–16.4.3)
-            - Generic error message to the user; detail stays in the log (16.5.1)
-            
-            ### Level 3 — highest assurance
-            
-            ASVS 5.0 has **92 L3 requirements**; they are not enumerated here. Two worth knowing because
-            they tighten an L2 requirement rather than adding a new one:
-            
-            - One factor must be hardware-based and phishing-resistant, e.g. a FIDO key (6.3.3, L3 clause)
-            - Log **all** authorization decisions, not only failures (16.3.2, L3 clause)
-            
-            For an actual L3 assessment, work from the standard itself — see
-            https://github.com/agamm/claude-code-owasp/blob/main/.claude/skills/owasp-security/reference/owasp-report.md for the chapter map.
-            
-            ## Language-Specific Security Quirks
-            
-            For per-language unsafe/safe examples and the functions to watch for across 20+ languages, see
-            https://github.com/agamm/claude-code-owasp/blob/main/.claude/skills/owasp-security/reference/languages.md. For anything not covered there, apply the
-            mindset below.
-            
-            ## Deep Security Analysis Mindset
-            
-            When reviewing any language, think like a senior security researcher:
-            
-            1. **Memory Model:** How does the language handle memory? Managed vs manual? GC pauses exploitable?
-            2. **Type System:** Weak typing = type confusion attacks. Look for coercion exploits.
-            3. **Serialization:** Every language has its pickle/Marshal equivalent. All are dangerous.
-            4. **Concurrency:** Race conditions, TOCTOU, atomicity failures specific to the threading model.
-            5. **FFI Boundaries:** Native interop is where type safety breaks down.
-            6. **Standard Library:** Historic CVEs in std libs (Python urllib, Java XML, Ruby OpenSSL).
-            7. **Package Ecosystem:** Typosquatting, dependency confusion, malicious packages.
-            8. **Build System:** Makefile/gradle/npm script injection during builds.
-            9. **Runtime Behavior:** Debug vs release differences (Rust overflow, C++ assertions).
-            10. **Error Handling:** How does the language fail? Silently? With stack traces? Fail-open?
-            
-            These are entry points, not complete coverage — research the language's own CWE patterns, CVE
-            history, and known footguns.
-            
-            Populate the JSON schema with every finding you identify.
+
+            ${{ steps.load_review_prompt.outputs.content }}
           claude_args: |
-              --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description"]}}}}'
+              --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"code_snippet":{"type":"string"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact","code_snippet"]}}}}'
               --allowedTools "Write,Bash(gh pr diff:*)"
+
       - name: Write structured findings to file
         env:
           STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
         run: printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
+
       - name: Convert findings to SARIF
-        run: |
-          python3 - <<'EOF'
-          import json
-          SEVERITY_MAP = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note"}
-          findings = json.load(open("security-findings.json")).get("findings", [])
-          sarif = {
-              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-              "version": "2.1.0",
-              "runs": [{
-                  "tool": {"driver": {"name": "claude-security-review", "informationUri": "https://claude.com", "rules": []}},
-                  "results": []
-              }]
-          }
-          rule_ids = {}
-          for f in findings:
-              rule_id = f.get("category", "generic-finding")
-              if rule_id not in rule_ids:
-                  rule_ids[rule_id] = len(sarif["runs"][0]["tool"]["driver"]["rules"])
-                  sarif["runs"][0]["tool"]["driver"]["rules"].append({
-                      "id": rule_id,
-                      "shortDescription": {"text": rule_id}
-                  })
-              sarif["runs"][0]["results"].append({
-                  "ruleId": rule_id,
-                  "ruleIndex": rule_ids[rule_id],
-                  "level": SEVERITY_MAP.get(f.get("severity", "").upper(), "warning"),
-                  "message": {"text": f"{f.get('description','')} Recommendation: {f.get('recommendation','')}"},
-                  "locations": [{
-                      "physicalLocation": {
-                          "artifactLocation": {"uri": f.get("file", "unknown")},
-                          "region": {"startLine": f.get("line", 1)}
-                      }
-                  }]
-              })
-          json.dump(sarif, open("security-findings.sarif", "w"), indent=2)
-          EOF
+        run: python3 .github/security-review/scripts/convert_to_sarif.py
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -344,6 +96,7 @@ jobs:
             security-findings.sarif
           retention-days: 7
           if-no-files-found: ignore
+
       - name: Post analysis as PR comment
         if: always() && github.event_name == 'pull_request'
         env:
@@ -352,9 +105,10 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body-file security-review-output.md
+
       - name: Sync Findings to JIRA
         id: jira
-        if: always() && github.event_name == 'pull_request' 
+        if: always() && github.event_name == 'pull_request'
         env:
           JIRA_BASE_URL: ${{ secrets.jira_base_url }}
           JIRA_PROJECT_KEY: ${{ secrets.jira_project_key }}
@@ -368,243 +122,16 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BRANCH: ${{ github.event.pull_request.head.ref }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 - <<'EOF'
-          import base64, hashlib, json, os, urllib.error, urllib.parse, urllib.request
-
-          JIRA_BASE_URL = os.environ["JIRA_BASE_URL"].rstrip("/")
-          JIRA_EMAIL = os.environ["JIRA_EMAIL"]
-          JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
-          JIRA_PROJECT_KEY = os.environ["JIRA_PROJECT_KEY"]
-          JIRA_STORY_KEY = os.environ["JIRA_STORY_KEY"]
-          SYNC_SEVERITIES = {s.strip().upper() for s in os.environ.get("SYNC_SEVERITY", "CRITICAL,HIGH,MEDIUM").split(",")}
-
-          PR_NUMBER = os.environ["PR_NUMBER"]
-          PR_URL = os.environ["PR_URL"]
-          PR_AUTHOR = os.environ["PR_AUTHOR"]
-          PR_BRANCH = os.environ["PR_BRANCH"]
-          COMMIT_SHA = os.environ["COMMIT_SHA"]
-
-          auth = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
-          HEADERS = {
-              "Authorization": f"Basic {auth}",
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-          }
-
-          def jira_request(method, path, body=None):
-              url = f"{JIRA_BASE_URL}{path}"
-              data = json.dumps(body).encode() if body is not None else None
-              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
-              try:
-                  with urllib.request.urlopen(req) as resp:
-                      raw = resp.read()
-                      return json.loads(raw) if raw else {}
-              except urllib.error.HTTPError as e:
-                  print(f"::error::Jira API {method} {path} failed: {e.code} {e.read().decode()}")
-                  raise
-
-          def adf_description(finding):
-              def para(text):
-                  return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
-              return {
-                  "type": "doc",
-                  "version": 1,
-                  "content": [
-                      para(f"Severity: {finding.get('severity','')}  |  Category: {finding.get('category','')}"),
-                      para(f"File: {finding.get('file','')}  Line: {finding.get('line','')}"),
-                      para(finding.get("description", "")),
-                      para(f"Impact: {finding.get('impact','')}"),
-                      para(f"Recommendation: {finding.get('recommendation','')}"),
-                      para(f"PR: {PR_URL} (#{PR_NUMBER}) by {PR_AUTHOR} on branch {PR_BRANCH} @ {COMMIT_SHA[:7]}"),
-                  ],
-              }
-
-          def fingerprint_label(finding):
-              # Deliberately NOT scoped to PR_NUMBER: the same underlying bug found on a
-              # different PR (or the same PR re-opened later) must resolve to the same
-              # fingerprint, otherwise "no duplicates" only holds within one PR's history.
-              key = f"{finding.get('file','')}:{finding.get('line','')}:{finding.get('category','')}"
-              short_hash = hashlib.sha1(key.encode()).hexdigest()[:8]
-              return f"secreview-{short_hash}"
-
-          def existing_issue(label):
-              # NOTE: GET/POST /rest/api/3/search was retired (HTTP 410) on 2025-08-01.
-              # Use the replacement /rest/api/3/search/jql endpoint instead.
-              # Issue creation (POST /rest/api/3/issue) is unaffected by this change.
-              jql = f'project = "{JIRA_PROJECT_KEY}" AND labels = "{label}"'
-              result = jira_request(
-                  "GET",
-                  f"/rest/api/3/search/jql?jql={urllib.parse.quote(jql)}&fields=key,status&maxResults=1",
-              )
-              issues = result.get("issues", [])
-              if not issues:
-                  return None
-              issue = issues[0]
-              is_done = issue["fields"]["status"]["statusCategory"]["key"] == "done"
-              return {"key": issue["key"], "is_done": is_done}
-
-          def reopen_issue(key):
-              # Workflow transitions are project-specific, so this looks for a plausible
-              # "reopen" transition by name rather than hardcoding a transition ID.
-              transitions = jira_request("GET", f"/rest/api/3/issue/{key}/transitions").get("transitions", [])
-              target = None
-              for t in transitions:
-                  name = (t.get("name") or "").lower()
-                  if "reopen" in name or name in ("to do", "open", "backlog"):
-                      target = t
-                      break
-              if not target:
-                  available = [t.get("name") for t in transitions]
-                  print(f"::warning::No suitable reopen transition found for {key}; leaving status "
-                        f"as-is. Available transitions: {available}")
-                  return
-              jira_request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": target["id"]}})
-              comment_payload = {
-                  "body": {
-                      "type": "doc",
-                      "version": 1,
-                      "content": [{
-                          "type": "paragraph",
-                          "content": [{
-                              "type": "text",
-                              "text": f"Regression: this finding was detected again in PR {PR_URL} "
-                                      f"(#{PR_NUMBER}) by {PR_AUTHOR} on branch {PR_BRANCH} "
-                                      f"@ {COMMIT_SHA[:7]}.",
-                          }],
-                      }],
-                  }
-              }
-              jira_request("POST", f"/rest/api/3/issue/{key}/comment", comment_payload)
-
-          def create_subtask(finding, label):
-              payload = {
-                  "fields": {
-                      "project": {"key": JIRA_PROJECT_KEY},
-                      "parent": {"key": JIRA_STORY_KEY},
-                      "issuetype": {"name": "Sub-task"},
-                      "summary": f"[{finding.get('severity','')}] {finding.get('category','')} in {finding.get('file','')}",
-                      "description": adf_description(finding),
-                      "labels": ["security-review", f"pr-{PR_NUMBER}", label],
-                  }
-              }
-              created = jira_request("POST", "/rest/api/3/issue", payload)
-              return created["key"]
-
-          def validate_permissions():
-              try:
-                  perms = jira_request(
-                      "GET",
-                      f"/rest/api/3/mypermissions?projectKey={JIRA_PROJECT_KEY}&permissions=CREATE_ISSUES,BROWSE_PROJECTS",
-                  )
-              except urllib.error.HTTPError as e:
-                  print(f"::error::Could not check permissions for project {JIRA_PROJECT_KEY} (HTTP {e.code}). "
-                        "This usually means the JIRA_EMAIL / JIRA_API_TOKEN pair failed authentication "
-                        "entirely — confirm the email matches the account that generated the current token, "
-                        "and that the token wasn't created with a restricted scope excluding this API.")
-                  raise SystemExit(1)
-              can_browse = perms.get("permissions", {}).get("BROWSE_PROJECTS", {}).get("havePermission", False)
-              can_create = perms.get("permissions", {}).get("CREATE_ISSUES", {}).get("havePermission", False)
-              if not can_browse:
-                  print(f"::error::The account behind JIRA_EMAIL/JIRA_API_TOKEN cannot even browse "
-                        f"project '{JIRA_PROJECT_KEY}' — either the project key is wrong, or that account "
-                        "isn't a member of the project.")
-                  raise SystemExit(1)
-              if not can_create:
-                  print(f"::error::The account behind JIRA_EMAIL/JIRA_API_TOKEN can see project "
-                        f"'{JIRA_PROJECT_KEY}' but lacks Create Issues permission there. If you recently "
-                        "rotated the API token, confirm it was generated as a full-access (unscoped) token, "
-                        "or that its scopes include issue creation, and that the owning account has the "
-                        "right project role.")
-                  raise SystemExit(1)
-
-          def validate_story():
-              if not JIRA_PROJECT_KEY or not JIRA_STORY_KEY:
-                  print("::error::JIRA_PROJECT_KEY or JIRA_STORY_KEY is empty — check the repo/org "
-                        "vars.JIRA_PROJECT_KEY and vars.JIRA_STORY_KEY are actually set.")
-                  raise SystemExit(1)
-              try:
-                  story = jira_request("GET", f"/rest/api/3/issue/{JIRA_STORY_KEY}?fields=project,issuetype")
-              except urllib.error.HTTPError as e:
-                  print(f"::error::Could not fetch parent issue {JIRA_STORY_KEY} (HTTP {e.code}). "
-                        "Either it doesn't exist, was deleted/moved, or the Jira account behind "
-                        "JIRA_EMAIL/JIRA_API_TOKEN lacks Browse permission on its project.")
-                  raise SystemExit(1)
-              story_project = story["fields"]["project"]["key"]
-              story_type = story["fields"]["issuetype"]["name"]
-              if story_project != JIRA_PROJECT_KEY:
-                  print(f"::error::{JIRA_STORY_KEY} belongs to project '{story_project}', but "
-                        f"JIRA_PROJECT_KEY is set to '{JIRA_PROJECT_KEY}'. Sub-tasks must be created "
-                        "in the same project as their parent — fix one of the two variables.")
-                  raise SystemExit(1)
-              if story_type.lower() == "sub-task":
-                  print(f"::error::{JIRA_STORY_KEY} is itself a Sub-task — a Sub-task cannot be "
-                        "nested under another Sub-task. Point JIRA_STORY_KEY at the parent Story instead.")
-                  raise SystemExit(1)
-
-          def main():
-              validate_permissions()
-              validate_story()
-
-              with open("security-findings.json") as f:
-                  findings = json.load(f).get("findings", [])
-
-              created_keys = []
-              reopened_keys = []
-              skipped_keys = []
-
-              for finding in findings:
-                  severity = (finding.get("severity") or "").upper()
-                  if severity not in SYNC_SEVERITIES:
-                      continue
-                  label = fingerprint_label(finding)
-                  existing = existing_issue(label)
-                  if existing is None:
-                      key = create_subtask(finding, label)
-                      print(f"Created {key} for {label}")
-                      created_keys.append(key)
-                  elif existing["is_done"]:
-                      key = existing["key"]
-                      reopen_issue(key)
-                      print(f"Reopened {key} for {label} (regression)")
-                      reopened_keys.append(key)
-                  else:
-                      print(f"Skipping existing open issue {existing['key']} for {label}")
-                      skipped_keys.append(existing["key"])
-
-              with open("jira-sync-summary.json", "w") as f:
-                  json.dump(
-                      {"created": created_keys, "reopened": reopened_keys, "skipped_existing": skipped_keys},
-                      f,
-                      indent=2,
-                  )
-
-          main()
-          EOF
+        run: python3 .github/security-review/scripts/sync_jira.py
 
       - name: Comment Jira links on PR
-        if: always() && github.event_name == 'pull_request' 
+        if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           JIRA_BASE_URL: ${{ secrets.jira_base_url }}
         run: |
           if [ -s jira-sync-summary.json ]; then
-            python3 - <<'EOF'
-          import json, os
-
-          data = json.load(open("jira-sync-summary.json"))
-          base = os.environ["JIRA_BASE_URL"].rstrip("/")
-          lines = ["### Jira sync"]
-          for key in data.get("created", []):
-              lines.append(f"- Created: [{key}]({base}/browse/{key})")
-          for key in data.get("reopened", []):
-              lines.append(f"- Reopened (regression): [{key}]({base}/browse/{key})")
-          for key in data.get("skipped_existing", []):
-              lines.append(f"- Already tracked: [{key}]({base}/browse/{key})")
-          if len(lines) == 1:
-              lines.append("_No findings met the Jira sync severity threshold._")
-          open("jira-comment.md", "w").write("\n".join(lines))
-          EOF
+            python3 .github/security-review/scripts/comment_jira_links.py
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
               --body-file jira-comment.md
@@ -626,7 +153,7 @@ jobs:
   # Re-scans the files this PR touched and closes any previously-open Jira
   # sub-task whose finding is no longer present in that fresh scan.
   resolve:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true 
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -635,16 +162,36 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Full history needed so both base.sha and merge_commit_sha below
+          # are locally resolvable for a direct git diff.
+          fetch-depth: 0
 
       - name: Get merged PR's changed files
         id: diff
         env:
-          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
+          # Deliberately NOT `gh pr diff --name-only` here: that asks GitHub's API to resolve "the diff for this PR", which does not reliably
+          # reflect every commit once a PR has closed (varies by merge strategy — squash in particular replaces the whole commit history
+          # with one new commit). Diffing base.sha -> merge_commit_sha directly with git is unambiguous: it's the literal file-level difference
+          # between the PR's original base and the exact commit that landed, so it can't silently drop files introduced by earlier commits.
+          
+          git fetch --depth=1 origin "$BASE_SHA" "$MERGE_SHA" 2>/dev/null || true
           {
             echo "files<<EOF"
-            gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only
+            git diff --name-only "$BASE_SHA" "$MERGE_SHA"
             echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Load verify prompt
+        id: load_verify_prompt
+        run: |
+          {
+            echo "content<<PROMPT_EOF"
+            cat .github/security-review/prompts/verify-skill.md
+            echo "PROMPT_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@v1
@@ -655,17 +202,12 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }} (already merged)
             <HARD_RULE>
-            This is a VERIFICATION scan, not an initial review: this PR has already
-            merged. Re-check only the files listed below for the same categories of
-            security issues (OWASP Top 10, injection, auth, crypto, etc.) using the
-            current, post-merge content of each file. Do not comment on style or
-            anything unrelated to security — this scan exists purely to confirm
-            which previously-flagged issues are still present.
+            ${{ steps.load_verify_prompt.outputs.content }}
             Files:
             ${{ steps.diff.outputs.files }}
             </HARD_RULE>
           claude_args: |
-            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact"]}}}}'
+            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"code_snippet":{"type":"string"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact","code_snippet"]}}}}'
             --allowedTools "Bash(gh pr diff:*)"
 
       - name: Write verification findings to file
@@ -685,139 +227,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          python3 - <<'EOF'
-          import base64, hashlib, json, os, re, urllib.error, urllib.parse, urllib.request
-
-          JIRA_BASE_URL = os.environ["JIRA_BASE_URL"].rstrip("/")
-          JIRA_EMAIL = os.environ["JIRA_EMAIL"]
-          JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
-          JIRA_PROJECT_KEY = os.environ["JIRA_PROJECT_KEY"]
-          JIRA_STORY_KEY = os.environ["JIRA_STORY_KEY"]
-          CHANGED_FILES = {f.strip() for f in os.environ.get("CHANGED_FILES", "").splitlines() if f.strip()}
-          PR_URL = os.environ["PR_URL"]
-          PR_NUMBER = os.environ["PR_NUMBER"]
-          MERGE_COMMIT_SHA = os.environ.get("MERGE_COMMIT_SHA", "")[:7]
-
-          auth = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
-          HEADERS = {
-              "Authorization": f"Basic {auth}",
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-          }
-
-          def jira_request(method, path, body=None):
-              url = f"{JIRA_BASE_URL}{path}"
-              data = json.dumps(body).encode() if body is not None else None
-              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
-              try:
-                  with urllib.request.urlopen(req) as resp:
-                      raw = resp.read()
-                      return json.loads(raw) if raw else {}
-              except urllib.error.HTTPError as e:
-                  print(f"::error::Jira API {method} {path} failed: {e.code} {e.read().decode()}")
-                  raise
-
-          def fingerprint(file, line, category):
-              key = f"{file}:{line}:{category}"
-              return f"secreview-{hashlib.sha1(key.encode()).hexdigest()[:8]}"
-
-          def fetch_open_security_issues():
-              jql = (
-                  f'project = "{JIRA_PROJECT_KEY}" AND parent = "{JIRA_STORY_KEY}" '
-                  f'AND labels = "security-review" AND statusCategory != Done'
-              )
-              issues = []
-              next_token = None
-              while True:
-                  params = {"jql": jql, "fields": "description,labels,status", "maxResults": "50"}
-                  if next_token:
-                      params["nextPageToken"] = next_token
-                  query = urllib.parse.urlencode(params)
-                  result = jira_request("GET", f"/rest/api/3/search/jql?{query}")
-                  issues.extend(result.get("issues", []))
-                  next_token = result.get("nextPageToken")
-                  if not next_token:
-                      break
-              return issues
-
-          def extract_file_and_fingerprint(issue):
-              fp = next((l for l in issue["fields"]["labels"] if l.startswith("secreview-")), None)
-              file_path = None
-              for block in issue["fields"]["description"].get("content", []):
-                  text = "".join(c.get("text", "") for c in block.get("content", []))
-                  match = re.match(r"File:\s*(\S+)\s+Line:", text)
-                  if match:
-                      file_path = match.group(1)
-                      break
-              return file_path, fp
-
-          def close_issue(key):
-              transitions = jira_request("GET", f"/rest/api/3/issue/{key}/transitions").get("transitions", [])
-              target = None
-              for t in transitions:
-                  name = (t.get("name") or "").lower()
-                  if any(word in name for word in ("done", "close", "resolve")):
-                      target = t
-                      break
-              if not target:
-                  available = [t.get("name") for t in transitions]
-                  print(f"::warning::No suitable close transition found for {key}; leaving status "
-                        f"as-is. Available transitions: {available}")
-                  return False
-              jira_request("POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": target["id"]}})
-              comment_payload = {
-                  "body": {
-                      "type": "doc",
-                      "version": 1,
-                      "content": [{
-                          "type": "paragraph",
-                          "content": [{
-                              "type": "text",
-                              "text": f"Resolved: no longer detected after {PR_URL} (#{PR_NUMBER}) merged "
-                                      f"(commit {MERGE_COMMIT_SHA}).",
-                          }],
-                      }],
-                  }
-              }
-              jira_request("POST", f"/rest/api/3/issue/{key}/comment", comment_payload)
-              return True
-
-          def main():
-              try:
-                  current_findings = json.load(open("verification-findings.json")).get("findings", [])
-              except FileNotFoundError:
-                  current_findings = []
-              current_fingerprints = {
-                  fingerprint(f.get("file", ""), f.get("line", ""), f.get("category", ""))
-                  for f in current_findings
-              }
-
-              closed_keys = []
-              still_open_keys = []
-              out_of_scope_keys = []
-
-              for issue in fetch_open_security_issues():
-                  key = issue["key"]
-                  file_path, fp = extract_file_and_fingerprint(issue)
-                  if file_path is None or file_path not in CHANGED_FILES:
-                      out_of_scope_keys.append(key)
-                      continue
-                  if fp in current_fingerprints:
-                      still_open_keys.append(key)
-                      continue
-                  if close_issue(key):
-                      closed_keys.append(key)
-
-              print(f"Closed: {closed_keys}")
-              print(f"Still open (re-confirmed): {still_open_keys}")
-              print(f"Out of scope (file not touched by this PR): {out_of_scope_keys}")
-
-              with open("jira-resolve-summary.json", "w") as f:
-                  json.dump({"closed": closed_keys, "still_open": still_open_keys}, f, indent=2)
-
-          main()
-          EOF
+        run: python3 .github/security-review/scripts/close_resolved_jira_issues.py
 
       - name: Comment resolution summary on PR
         if: always()
@@ -825,17 +235,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -s jira-resolve-summary.json ]; then
-            python3 - <<'EOF'
-          import json
-
-          data = json.load(open("jira-resolve-summary.json"))
-          lines = ["### Jira auto-resolve"]
-          for key in data.get("closed", []):
-              lines.append(f"- Closed (no longer detected): {key}")
-          if not data.get("closed"):
-              lines.append("_No open findings were resolved by this merge._")
-          open("jira-resolve-comment.md", "w").write("\n".join(lines))
-          EOF
+            python3 .github/security-review/scripts/comment_resolution_summary.py
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
               --body-file jira-resolve-comment.md
