@@ -77,7 +77,7 @@ def close_issue(key):
     target = None
     for t in transitions:
         name = (t.get("name") or "").lower()
-        if any(word in name for word in ("done", "close", "resolve")):
+        if any(word in name for word in ("done")):
             target = t
             break
     if not target:
