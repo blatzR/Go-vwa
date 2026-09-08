@@ -61,9 +61,18 @@ jobs:
             Only review the changes introduced in this PR — do not flag or analyze
             pre-existing code this PR doesn't touch. Changed files:
             ${{ steps.diff.outputs.files }}
+            Write your full analysis with severity [Critical, High, Medium, Low] based on CVSS score and impact, category below title, including reasoning for each finding, to a file at security-review-output.md in the repo root.
             </HARD_RULE>
 
             ${{ steps.load_review_prompt.outputs.content }}
+
+            <HARD_RULE>
+            Reminder: report findings only for files in the changed-files list given at
+            the top of this prompt. If you read other files for context (e.g. to check
+            whether a middleware or caller mitigates something), that's fine — but do not
+            emit a finding whose file is outside that list.
+            </HARD_RULE>
+            
           claude_args: |
               --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"code_snippet":{"type":"string"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact","code_snippet"]}}}}'
               --allowedTools "Write,Bash(gh pr diff:*)"
@@ -72,6 +81,13 @@ jobs:
         env:
           STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
         run: printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
+
+      - name: Filter findings to PR diff
+        # Belt-and-suspenders enforcement of the <HARD_RULE> above: the prompt can be ignored, this can't. Drops any finding whose file isn't in
+        # this PR's changed-files list, and logs a warning when it does so see filter_findings_to_diff.py for why this exists.
+        env:
+          CHANGED_FILES: ${{ steps.diff.outputs.files }}
+        run: python3 .github/security-review/scripts/filter_findings_to_diff.py
 
       - name: Convert findings to SARIF
         run: python3 .github/security-review/scripts/convert_to_sarif.py
