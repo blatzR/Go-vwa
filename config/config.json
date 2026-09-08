@@ -1,5 +1,5 @@
 {
-    "user": "govwauser",
+    "user": "CHANGE_ME",
     "password": "123456789",
     "dbname": "govwa",
     "sqlhost": "db-mysql",
