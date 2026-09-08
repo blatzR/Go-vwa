@@ -31,11 +31,17 @@ jobs:
         id: diff
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Local git diff instead of `gh pr diff --name-only`: the GitHub API's
+          # diff endpoint (which `gh pr diff` calls) hard-caps at 300 changed
+          # files and returns HTTP 406 beyond that. A local git diff between the
+          # PR's base and head commits has no such limit.
+          git fetch --depth=1 origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
           {
             echo "files<<EOF"
-            gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --name-only
+            git diff --name-only "$BASE_SHA" "$HEAD_SHA"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
