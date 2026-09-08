@@ -1,6 +1,6 @@
 {
     "user": "govwauser",
-    "password": "CHANGE_ME_TO_SOMETHING_SECURE",
+    "password": "CHANGE_ME",
     "dbname": "govwa",
     "sqlhost": "db-mysql",
     "sqlport": "3306",
