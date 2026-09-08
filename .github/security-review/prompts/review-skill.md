@@ -1,6 +1,6 @@
 ---
 name: owasp-security
-description: Use when reviewing code for security vulnerabilities, implementing authentication/authorization, handling user input, or discussing web application security. Covers OWASP Top 10:2025, ASVS 5.0, LLM Top 10 (2025), and Agentic AI security (2026).
+description: Use when reviewing code for security vulnerabilities, implementing authentication/authorization, handling user input, or discussing web application security. Covers OWASP Top 10:2025, ASVS 5.0.
 ---
 
 # OWASP Security Best Practices Skill
@@ -48,6 +48,37 @@ Report severity by exploitability, not by pattern. State the concrete path — *
 reaches this sink* — and say so explicitly when a finding is theoretical or defense-in-depth
 rather than directly exploitable. If reachability can't be determined from the code available,
 say that instead of asserting either way.
+
+## Severity Floor: Hardcoded Secrets & Vulnerable Configuration
+
+The exploitability-based severity guidance above does not apply to this category — it has a
+hard floor regardless of reachability, because the vulnerability is the exposure itself, not
+whether an attacker-controlled input reaches it.
+
+Always report as **CRITICAL or HIGH** (never MEDIUM/LOW, never dismissed as unreachable) any
+of the following found committed in the diff:
+
+- **Hardcoded credentials or secrets** — API keys, access/secret keys, private keys or
+  certificates, passwords, OAuth client secrets/tokens, session/JWT signing keys, webhook
+  signing secrets, or database/service connection strings with embedded credentials.
+- **Vulnerable security configuration** — debug/verbose mode enabled in a production-facing
+  config, TLS/certificate verification disabled, permissive CORS (wildcard origin combined
+  with credentials allowed), overly-broad cloud IAM policies or storage ACLs open to the
+  public, authentication/authorization middleware disabled or bypassed, insecure
+  deserialization enabled, or an admin/debug endpoint exposed without auth.
+
+Classification within that floor:
+- **CRITICAL** — the value looks live/functional (matches a real provider's key format, a
+  private key block, a connection string with a real-looking host/credential pair) or the
+  configuration issue exposes a production system or all user data.
+- **HIGH** — the value is present but ambiguous (could be a placeholder, but the code does
+  not clearly mark it as `example`/`test`/`changeme`/`xxx`/a documented dummy fixture), or the
+  configuration issue is scoped to a non-production or lower-blast-radius surface.
+
+Do not downgrade a finding in this category on the grounds that "no attacker-controlled input
+reaches it" — a hardcoded credential is a finding because it is committed to version control
+and therefore already exposed to anyone with repo access, not because of a runtime data path.
+State which sub-type it is (secret vs. misconfiguration) in the finding's category field.
 
 ## Security Code Review Checklist
 
@@ -240,6 +271,12 @@ When reviewing any language, think like a senior security researcher:
 These are entry points, not complete coverage — research the language's own CWE patterns, CVE
 history, and known footguns.
 Write your full analysis with severity/impact category below title, including reasoning for each finding, to a file at security-review-output.md in the repo root.
+
+Before you populate the JSON schema: re-check that every finding's `file` is one of the
+changed files stated in the task instructions, not merely a file you happened to read while
+tracing reachability. Reading other files for context is expected and fine; reporting a
+finding located in one of them is not — drop it instead.
+
 Populate the JSON schema with every finding you identify. For code_snippet,
 copy the exact vulnerable line(s) verbatim from the file — this is used as a
 stable identity for the finding across future commits, so do not paraphrase,
