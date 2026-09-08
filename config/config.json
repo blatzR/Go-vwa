@@ -7,5 +7,5 @@
     "webserver": "http://localhost",
     "webport": "8888",
 
-    "sessionkey": "Govw@444"
+    "sessionkey": "CHANGE_ME_TO_A_LONG_RANDOM_VALUE"
 }
