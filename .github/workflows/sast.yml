@@ -225,17 +225,21 @@ jobs:
           STRUCTURED_OUTPUT: ${{ steps.verify.outputs.structured_output }}
         run: printf '%s' "$STRUCTURED_OUTPUT" > verification-findings.json
 
-      - name: Close resolved Jira issues
+      - name: Resolve Jira issues (close PR's tickets, resync against verification scan)
         id: close
+        # Closes every open ticket labeled for this PR unconditionally, then re-runs the same create/reopen/skip logic sync_jira.py uses (shared
+        # via jira_common.py) against the fresh verification-findings.json. Anything still actually present gets reopened — same ticket, not a
+        # new one — so this only "resolves" what really didn't come back.
         env:
           JIRA_BASE_URL: ${{ secrets.jira_base_url }}
           JIRA_PROJECT_KEY: ${{ secrets.jira_project_key }}
           JIRA_STORY_KEY: ${{ secrets.jira_story_key }}
           JIRA_EMAIL: ${{ secrets.jira_email }}
           JIRA_API_TOKEN: ${{ secrets.jira_api_token }}
-          CHANGED_FILES: ${{ steps.diff.outputs.files }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
           MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: python3 .github/security-review/scripts/close_resolved_jira_issues.py
 
