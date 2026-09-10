@@ -121,7 +121,7 @@ jobs:
 
       - name: Sync Findings to JIRA
         id: jira
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'master' || startsWith(github.event.pull_request.base.ref, 'release/'))
         env:
           JIRA_BASE_URL: ${{ secrets.jira_base_url }}
           JIRA_PROJECT_KEY: ${{ secrets.jira_project_key }}
@@ -138,7 +138,7 @@ jobs:
         run: python3 .github/security-review/scripts/sync_jira.py
 
       - name: Comment Jira links on PR
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'master' || startsWith(github.event.pull_request.base.ref, 'release/'))
         env:
           GH_TOKEN: ${{ github.token }}
           JIRA_BASE_URL: ${{ secrets.jira_base_url }}
@@ -164,7 +164,7 @@ jobs:
   # Runs only when a PR actually merges (not on close-without-merge), and only if Jira sync is configured (same secrets.jira_base_url guard used above).
   # Re-scans the files this PR touched and closes any previously-open Jira sub-task whose finding is no longer present in that fresh scan.
   resolve:
-    if: github.event.pull_request.merged == true 
+    if: github.event.pull_request.merged == true && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'master' || startsWith(github.event.pull_request.base.ref, 'release/'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
