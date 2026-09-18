@@ -56,6 +56,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         id: security
+        continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Optional: Add track_progress: true for visual progress tracking during security reviews
@@ -86,8 +87,14 @@ jobs:
       - name: Write structured findings to file
         env:
           STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
-        run: printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
-
+        run: |
+          if [ -z "$STRUCTURED_OUTPUT" ]; then
+            echo "::warning::No structured_output from the review step — writing a review_failed sentinel instead of treating this as a clean scan."
+            echo '{"review_failed": true, "findings": []}' > security-findings.json
+          else
+            printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
+          fi
+          
       - name: Filter findings to PR diff
         # Belt-and-suspenders enforcement of the <HARD_RULE> above: the prompt can be ignored, this can't. Drops any finding whose file isn't in
         # this PR's changed-files list, and logs a warning when it does so see filter_findings_to_diff.py for why this exists.
@@ -115,6 +122,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -f security-review-output.md ]; then
+            echo "::warning::security-review-output.md was never written by the review step — posting a fallback comment instead of failing on a missing file."
+            {
+              echo "### Security Review"
+              echo ""
+              echo "_The review step did not complete successfully for this run — no report was generated. Check the workflow run's logs for details. This is treated as a failed review, not a clean scan; see the Security gate step's result._"
+            } > security-review-output.md
+          fi
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body-file security-review-output.md
@@ -223,7 +238,14 @@ jobs:
       - name: Write verification findings to file
         env:
           STRUCTURED_OUTPUT: ${{ steps.verify.outputs.structured_output }}
-        run: printf '%s' "$STRUCTURED_OUTPUT" > verification-findings.json
+        run: |
+          if [ -z "$STRUCTURED_OUTPUT" ]; then
+            echo "::warning::No structured_output from the verify step — writing a review_failed sentinel so the resolve step aborts instead of treating this as a clean scan."
+            echo '{"review_failed": true, "findings": []}' > verification-findings.json
+          else
+            printf '%s' "$STRUCTURED_OUTPUT" > verification-findings.json
+          fi
+
 
       - name: Resolve Jira issues (close PR's tickets, resync against verification scan)
         id: close
