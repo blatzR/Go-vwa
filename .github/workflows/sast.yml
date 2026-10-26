@@ -137,7 +137,7 @@ jobs:
           
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body-file pre-comment.md
+            --body-file pr-comment.md
 
       - name: Sync Findings to JIRA
         id: jira
