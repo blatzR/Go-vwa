@@ -121,18 +121,23 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMENT_TITLE: "YOU GUARD Security Review"
         run: |
           if [ ! -f security-review-output.md ]; then
             echo "::warning::security-review-output.md was never written by the review step — posting a fallback comment instead of failing on a missing file."
-            {
-              echo "### Security Review"
-              echo ""
-              echo "_The review step did not complete successfully for this run — no report was generated. Check the workflow run's logs for details. This is treated as a failed review, not a clean scan; see the Security gate step's result._"
-            } > security-review-output.md
+          {
+            echo "_The review step did not complete successfully for this run — no report was generated. Check the workflow run's logs for details. This is treated as a failed review, not a clean scan; see the Security gate step's result._"
+          } > security-review-output.md
           fi
+          {  
+            echo "### ${COMMENT_TITLE}"
+            echo ""
+            cat security-review-output.md
+          } > pr-comment.md
+          
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body-file security-review-output.md
+            --body-file pre-comment.md
 
       - name: Sync Findings to JIRA
         id: jira
