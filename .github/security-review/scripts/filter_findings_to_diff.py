@@ -2,14 +2,18 @@ import json
 import os
 
 # Enforces the <HARD_RULE> ("only review this PR's changed files") in code
-# instead of trusting the model to have honored it. <HARD_RULE> is prompt
-# text, not a technical restriction — the full repo is checked out and
-# Claude's default Read/Glob/Grep tools can see all of it regardless of what
-# the prompt asks for, so this step is the actual enforcement point.
-#
-# CHANGED_FILES is expected to be a newline-separated list (the same value
-# passed to steps.diff.outputs.files in the workflow), matching the pattern
-# already used in close_resolved_jira_issues.py.
+# instead of trusting the model to have honored it. Also enforces the
+# central ignore list: CHANGED_FILES is the scannable list produced by
+# changed_files.sh, so ignored files are absent from it too.
+
+# Which findings file to filter: security-findings.json (PR scan) or
+# verification-findings.json (post-merge scan).
+FINDINGS_FILE = os.environ.get("FINDINGS_FILE", "security-findings.json")
+
+# "ok" only when the changed-files step ran AND succeeded. This separates
+# "every changed file was ignored" (empty list -> filter strictly, keep nothing)
+# from "no diff scope at all" (workflow_dispatch / step skipped -> warn, pass through).
+DIFF_STATUS = os.environ.get("DIFF_STATUS", "")
 
 CHANGED_FILES = {
     f.strip().lstrip("./")
@@ -17,22 +21,15 @@ CHANGED_FILES = {
     if f.strip()
 }
 
-with open("security-findings.json") as fh:
+with open(FINDINGS_FILE) as fh:
     data = json.load(fh)
 
 findings = data.get("findings", [])
 
-if not CHANGED_FILES:
-    # No diff scope was available to filter against — most likely this run
-    # was triggered by workflow_dispatch (the "Get changed files" step only
-    # runs on pull_request events) or the gh pr diff call returned nothing.
-    # Passing findings through unfiltered here is a deliberate choice over
-    # silently dropping everything, but it must be loud: this is exactly the
-    # condition that let a prior run scan the whole codebase unnoticed.
-    print("::warning::CHANGED_FILES is empty — no PR diff scope was available, so findings "
-          "were NOT filtered by file. If this run was triggered by workflow_dispatch, that's "
-          "expected (there's no PR to diff against). If this was a pull_request event, the "
-          "'Get changed files' step likely failed or returned nothing — check its logs.")
+if DIFF_STATUS != "ok":
+    print("::warning::No diff scope was available (DIFF_STATUS is not 'ok'), so findings "
+          "were NOT filtered by file. Expected for workflow_dispatch runs. For a "
+          "pull_request run, check the 'Get changed files' step's logs.")
     kept, dropped = findings, []
 else:
     kept, dropped = [], []
@@ -42,13 +39,11 @@ else:
 
 if dropped:
     dropped_files = sorted({f.get("file", "<missing>") for f in dropped})
-    print(f"::warning::Dropped {len(dropped)} finding(s) outside the PR diff scope "
-          f"(files not in this PR's changed-files list): {dropped_files}. This means the "
-          "model reported on code the <HARD_RULE> told it not to — worth checking the run's "
-          "prompt/log if this keeps happening.")
+    print(f"::warning::Dropped {len(dropped)} finding(s) in files outside the scannable list "
+          f"(not changed in this PR, or matched by the ignore list): {dropped_files}.")
 
 data["findings"] = kept
-with open("security-findings.json", "w") as fh:
+with open(FINDINGS_FILE, "w") as fh:
     json.dump(data, fh, indent=2)
 
-print(f"Findings kept: {len(kept)}  |  dropped (out of scope): {len(dropped)}")
+print(f"[{FINDINGS_FILE}] kept: {len(kept)}  |  dropped: {len(dropped)}")
