@@ -41,9 +41,20 @@ jobs:
           git fetch --depth=1 origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true
           {
             echo "files<<EOF"
-            git diff --name-only "$BASE_SHA" "$HEAD_SHA"
+            bash .github/security-review/scripts/changed_files.sh "$BASE_SHA" "$HEAD_SHA"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+          echo "diff_status=ok" >> "$GITHUB_OUTPUT"
+          if [ -s "$RUNNER_TEMP/scannable-files.txt" ]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -s "$RUNNER_TEMP/ignored-files.txt" ]; then
+            echo "::notice::Skipped $(wc -l < "$RUNNER_TEMP/ignored-files.txt") file per ignore list: $(paste -sd, "$RUNNER_TEMP/ignored-files.txt")"
+          fi
 
       - name: Load review prompt
         id: load_review_prompt
@@ -56,6 +67,7 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         id: security
+        if: steps.diff.outputs.has_files != 'false'
         continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -87,10 +99,20 @@ jobs:
       - name: Write structured findings to file
         env:
           STRUCTURED_OUTPUT: ${{ steps.security.outputs.structured_output }}
+          HAS_FILES: ${{steps.diff.outputs.has_files}}
         run: |
-          if [ -z "$STRUCTURED_OUTPUT" ]; then
-            echo "::warning::No structured_output from the review step — writing a review_failed sentinel instead of treating this as a clean scan."
-            echo '{"review_failed": true, "findings": []}' > security-findings.json
+          if [ "$HAS_FILES" = "false" ]; then
+            echo "::notice::Every changed file matched the ignore list. Scan skipped."
+            echo '{"findings": [], "skipped_reason": "no_scannable_files"}' > security-findings.json
+            {
+              echo "No scannable files in this PR. Every changed file matched the YOU GUARD ignore list, so no security review was run."
+              echo ""
+              echo "Skipped files:"
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/ignored-files.txt"
+             } > security-review-output.md
+            elif [ -z "$STRUCTURED_OUTPUT"]; then
+             echo "::warning::No structured_output from the review step — writing a review_failed sentinel instead of treating this as a clean scan."            
+             echo '{"review_failed": true, "findings": []}' > security-findings.json
           else
             printf '%s' "$STRUCTURED_OUTPUT" > security-findings.json
           fi
@@ -100,6 +122,7 @@ jobs:
         # this PR's changed-files list, and logs a warning when it does so see filter_findings_to_diff.py for why this exists.
         env:
           CHANGED_FILES: ${{ steps.diff.outputs.files }}
+          DIFF_STATUS: ${{ steps.diff.outputs.diff_status }}
         run: python3 .github/security-review/scripts/filter_findings_to_diff.py
 
       - name: Convert findings to SARIF
@@ -181,103 +204,103 @@ jobs:
             exit 1
           fi
 
-  # Runs only when a PR actually merges (not on close-without-merge), and only if Jira sync is configured (same secrets.jira_base_url guard used above).
-  # Re-scans the files this PR touched and closes any previously-open Jira sub-task whose finding is no longer present in that fresh scan.
-  resolve:
-    if: github.event.pull_request.merged == true && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'master' || startsWith(github.event.pull_request.base.ref, 'release/'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      security-events: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          # Full history needed so both base.sha and merge_commit_sha below are locally resolvable for a direct git diff.
-          fetch-depth: 0
+  # # Runs only when a PR actually merges (not on close-without-merge), and only if Jira sync is configured (same secrets.jira_base_url guard used above).
+  # # Re-scans the files this PR touched and closes any previously-open Jira sub-task whose finding is no longer present in that fresh scan.
+  # resolve:
+  #   if: github.event.pull_request.merged == true && (github.event.pull_request.base.ref == 'main' || github.event.pull_request.base.ref == 'master' || startsWith(github.event.pull_request.base.ref, 'release/'))
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #     pull-requests: write
+  #     security-events: write
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #       with:
+  #         # Full history needed so both base.sha and merge_commit_sha below are locally resolvable for a direct git diff.
+  #         fetch-depth: 0
 
-      - name: Get merged PR's changed files
-        id: diff
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          # Deliberately NOT `gh pr diff --name-only` here: that asks GitHub's API to resolve "the diff for this PR", which does not reliably
-          # reflect every commit once a PR has closed (varies by merge strategy — squash in particular replaces the whole commit history
-          # with one new commit). Diffing base.sha -> merge_commit_sha directly with git is unambiguous: it's the literal file-level difference
-          # between the PR's original base and the exact commit that landed, so it can't silently drop files introduced by earlier commits.
+  #     - name: Get merged PR's changed files
+  #       id: diff
+  #       env:
+  #         BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  #         MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+  #       run: |
+  #         # Deliberately NOT `gh pr diff --name-only` here: that asks GitHub's API to resolve "the diff for this PR", which does not reliably
+  #         # reflect every commit once a PR has closed (varies by merge strategy — squash in particular replaces the whole commit history
+  #         # with one new commit). Diffing base.sha -> merge_commit_sha directly with git is unambiguous: it's the literal file-level difference
+  #         # between the PR's original base and the exact commit that landed, so it can't silently drop files introduced by earlier commits.
           
-          git fetch --depth=1 origin "$BASE_SHA" "$MERGE_SHA" 2>/dev/null || true
-          {
-            echo "files<<EOF"
-            git diff --name-only "$BASE_SHA" "$MERGE_SHA"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+  #         git fetch --depth=1 origin "$BASE_SHA" "$MERGE_SHA" 2>/dev/null || true
+  #         {
+  #           echo "files<<EOF"
+  #           git diff --name-only "$BASE_SHA" "$MERGE_SHA"
+  #           echo "EOF"
+  #         } >> "$GITHUB_OUTPUT"
 
-      - name: Load verify prompt
-        id: load_verify_prompt
-        run: |
-          {
-            echo "content<<PROMPT_EOF"
-            cat .github/security-review/prompts/verify-skill.md
-            echo "PROMPT_EOF"
-          } >> "$GITHUB_OUTPUT"
+  #     - name: Load verify prompt
+  #       id: load_verify_prompt
+  #       run: |
+  #         {
+  #           echo "content<<PROMPT_EOF"
+  #           cat .github/security-review/prompts/verify-skill.md
+  #           echo "PROMPT_EOF"
+  #         } >> "$GITHUB_OUTPUT"
 
-      - uses: anthropics/claude-code-action@v1
-        id: verify
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }} (already merged)
-            <HARD_RULE>
-            ${{ steps.load_verify_prompt.outputs.content }}
-            Files:
-            ${{ steps.diff.outputs.files }}
-            </HARD_RULE>
-          claude_args: |
-            --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"code_snippet":{"type":"string"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact","code_snippet"]}}}}'
-            --allowedTools "Bash(gh pr diff:*)"
+  #     - uses: anthropics/claude-code-action@v1
+  #       id: verify
+  #       with:
+  #         claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+  #         prompt: |
+  #           REPO: ${{ github.repository }}
+  #           PR NUMBER: ${{ github.event.pull_request.number }} (already merged)
+  #           <HARD_RULE>
+  #           ${{ steps.load_verify_prompt.outputs.content }}
+  #           Files:
+  #           ${{ steps.diff.outputs.files }}
+  #           </HARD_RULE>
+  #         claude_args: |
+  #           --json-schema '{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"category":{"type":"string"},"file":{"type":"string"},"line":{"type":"number"},"code_snippet":{"type":"string"},"description":{"type":"string"},"impact":{"type":"string"},"recommendation":{"type":"string"}},"required":["severity","category","file","description","impact","code_snippet"]}}}}'
+  #           --allowedTools "Bash(gh pr diff:*)"
 
-      - name: Write verification findings to file
-        env:
-          STRUCTURED_OUTPUT: ${{ steps.verify.outputs.structured_output }}
-        run: |
-          if [ -z "$STRUCTURED_OUTPUT" ]; then
-            echo "::warning::No structured_output from the verify step — writing a review_failed sentinel so the resolve step aborts instead of treating this as a clean scan."
-            echo '{"review_failed": true, "findings": []}' > verification-findings.json
-          else
-            printf '%s' "$STRUCTURED_OUTPUT" > verification-findings.json
-          fi
+  #     - name: Write verification findings to file
+  #       env:
+  #         STRUCTURED_OUTPUT: ${{ steps.verify.outputs.structured_output }}
+  #       run: |
+  #         if [ -z "$STRUCTURED_OUTPUT" ]; then
+  #           echo "::warning::No structured_output from the verify step — writing a review_failed sentinel so the resolve step aborts instead of treating this as a clean scan."
+  #           echo '{"review_failed": true, "findings": []}' > verification-findings.json
+  #         else
+  #           printf '%s' "$STRUCTURED_OUTPUT" > verification-findings.json
+  #         fi
 
 
-      - name: Resolve Jira issues (close PR's tickets, resync against verification scan)
-        id: close
-        # Closes every open ticket labeled for this PR unconditionally, then re-runs the same create/reopen/skip logic sync_jira.py uses (shared
-        # via jira_common.py) against the fresh verification-findings.json. Anything still actually present gets reopened — same ticket, not a
-        # new one — so this only "resolves" what really didn't come back.
-        env:
-          JIRA_BASE_URL: ${{ secrets.jira_base_url }}
-          JIRA_PROJECT_KEY: ${{ secrets.jira_project_key }}
-          JIRA_STORY_KEY: ${{ secrets.jira_story_key }}
-          JIRA_EMAIL: ${{ secrets.jira_email }}
-          JIRA_API_TOKEN: ${{ secrets.jira_api_token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: python3 .github/security-review/scripts/close_resolved_jira_issues.py
+  #     - name: Resolve Jira issues (close PR's tickets, resync against verification scan)
+  #       id: close
+  #       # Closes every open ticket labeled for this PR unconditionally, then re-runs the same create/reopen/skip logic sync_jira.py uses (shared
+  #       # via jira_common.py) against the fresh verification-findings.json. Anything still actually present gets reopened — same ticket, not a
+  #       # new one — so this only "resolves" what really didn't come back.
+  #       env:
+  #         JIRA_BASE_URL: ${{ secrets.jira_base_url }}
+  #         JIRA_PROJECT_KEY: ${{ secrets.jira_project_key }}
+  #         JIRA_STORY_KEY: ${{ secrets.jira_story_key }}
+  #         JIRA_EMAIL: ${{ secrets.jira_email }}
+  #         JIRA_API_TOKEN: ${{ secrets.jira_api_token }}
+  #         PR_URL: ${{ github.event.pull_request.html_url }}
+  #         PR_NUMBER: ${{ github.event.pull_request.number }}
+  #         PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+  #         PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+  #         MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+  #       run: python3 .github/security-review/scripts/close_resolved_jira_issues.py
 
-      - name: Comment resolution summary on PR
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ -s jira-resolve-summary.json ]; then
-            python3 .github/security-review/scripts/comment_resolution_summary.py
-            gh pr comment ${{ github.event.pull_request.number }} \
-              --repo ${{ github.repository }} \
-              --body-file jira-resolve-comment.md
-          fi
+  #     - name: Comment resolution summary on PR
+  #       if: always()
+  #       env:
+  #         GH_TOKEN: ${{ github.token }}
+  #       run: |
+  #         if [ -s jira-resolve-summary.json ]; then
+  #           python3 .github/security-review/scripts/comment_resolution_summary.py
+  #           gh pr comment ${{ github.event.pull_request.number }} \
+  #             --repo ${{ github.repository }} \
+  #             --body-file jira-resolve-comment.md
+  #         fi

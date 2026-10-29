@@ -1,0 +1,9 @@
+# YOU GUARD central ignore list. Applies to EVERY repo that uses the scan.
+# Syntax: git glob. "*" stays inside one folder, "**" crosses folders.
+# Changes to this file need security team approval.
+
+# Third-party / vendored code
+**/node_modules/**
+**/vendor/**
+
+**/config/config.json.example
