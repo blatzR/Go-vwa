@@ -6,4 +6,4 @@
 **/node_modules/**
 **/vendor/**
 
-**/config/config.json.example
+**/config/*
